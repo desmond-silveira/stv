@@ -1,5 +1,5 @@
 /**
- * Copyright © 2018 Desmond Silveira.  All rights reserved.
+ * Copyright © 2021 Desmond Silveira.  All rights reserved.
  *
  * This software is free to use and extend to all registered members of the
  * American Solidarity Party.  Any extensions must give credit to the author
@@ -76,12 +76,12 @@ function parseBlt(text) {
 }
 
 function tokenize(text) {
-    text = text.replace(/^\uFEFF/, '')  // remove BOM
-    text = text.replaceAll(/(#[^\r\n]*)?\r?\n/g, ' ').replace(/#.*$/, '');  // remove comments
-    let stringStart = text.indexOf('"');
-    let tokens = text.slice(0, stringStart).split(/\s+/);
-    tokens.pop(); // remove last empty token
-    let stringTokens = text.slice(stringStart + 1, text.lastIndexOf('"')).split(/"\s+"/);
-    tokens.push(...stringTokens);
-    return tokens;
+  text = text.replace(/^\uFEFF/, '')  // remove BOM
+  text = text.replaceAll(/(#[^\r\n]*)?\r?\n/g, ' ').replace(/#.*$/, '');  // remove comments
+  let stringStart = text.indexOf('"');
+  let tokens = text.slice(0, stringStart).split(/\s+/);
+  tokens.pop(); // remove last empty token
+  let stringTokens = text.slice(stringStart + 1, text.lastIndexOf('"')).split(/"\s+"/);
+  tokens.push(...stringTokens);
+  return tokens;
 }
