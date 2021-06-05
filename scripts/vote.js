@@ -14,74 +14,408 @@ $(document).ready(function () {
       reader.onload = function () {
         text = reader.result;
         $('#blt-content').html('<pre>' + text + '</pre>');
-        parseBlt(text);
+        const blt = new BltFile(text);
+        let results = countStv(blt, blt.withdrawn);
       };
       reader.readAsText(this.files[0]);
     }
   });
 });
 
-function parseBlt(text) {
-  const withdrawn = [];
-  const ballots = new Map();
-  const candidates = [];
+/** An election candidate. */
+class Candidate {
+  static map = new Map();
+  name;
+  lastName;
+  i;
 
-  let tokens = tokenize(text);
-
-  let i = 0;
-  const candidateCount = Number(tokens[i++]);
-
-  const seatCount = Number(tokens[i++]);
-
-  let token = Number(tokens[i++]);
-  while (token < 0) {
-    withdrawn.push(-token);
-    token = Number(tokens[i++]);
+  constructor(i, name) {
+    this.name = name;
+    this.i = i;
+    this.lastName = name.substring(name.lastIndexOf(' ') + 1);
+    Candidate.map.set(i, this);
   }
-
-  do {
-    let weight = token;
-    token = Number(tokens[i++]);
-    let ballot = [];
-    while (token != 0) {
-      ballot.push(token);
-      token = Number(tokens[i++]);
-    }
-    ballots.set(ballot, (ballots.get(ballot) || 0) + weight);
-    token = Number(tokens[i++]);
-  } while (token != 0);
-
-  let index = 0;
-  for (let c  = 0; c < candidateCount; c++) {
-    token = tokens[i++];
-    if (!withdrawn.includes(c + 1)) {
-      candidates[index] = {
-        "name" : token,
-        "lastName": token.substring(token.lastIndexOf(' ') + 1),
-        "id": c + 1
-      }
-      index++;
-    }
-  }
-
-  token = tokens[i++];
-  const title = token;
-
-  return {
-    "seatCount" : seatCount,
-    "ballots" : ballots,
-    "candidates" : candidates,
-    "title" : title
-  };
 }
 
-function tokenize(text) {
-  text = text.replace(/^\uFEFF/, '')  // remove BOM
-  text = text.replaceAll(/(#[^\r\n]*)?\r?\n/g, ' ').replace(/#.*$/, '');  // remove comments
-  let stringStart = text.indexOf('"');
-  let tokens = text.slice(0, stringStart).split(/\s+/);
-  tokens.pop(); // remove last empty token
-  let stringTokens = text.slice(stringStart + 1, text.lastIndexOf('"')).split(/"\s+"/);
-  tokens.push(...stringTokens);
-  return tokens;
+/** A ballot of ranked choices for a single contest. */
+class Ballot {
+  candidates = [];
+  value = 1;
+
+  /**
+   * Returns the next preference after the given candidate from among the
+   * continuing candidates.
+   * @param {!number} candidate The id of the candidate.
+   * @param {!Array<!Candidate>} continuing Continuing candidates.
+   * @return {number} The id of the next continuing candidate.
+   */
+  nextPreference(candidate, continuing) {
+    let found = false;
+    for (const c of this.candidates) {
+      if (!found) {
+        found = c == candidate;
+      } else if (continuing.includes(Candidate.map.get(c))) {
+        return c;
+      }
+    }
+    return null;
+  }
+}
+
+class Round {
+  quota;
+  /** {!Map<?Candidate, Array<number>>} */
+  candidates;
+  provisionals;
+  excludeds;
+}
+
+/**
+ * A BLT file is a file, first described by Hill, Wichmann & Woodall in
+ * "Algorithm 123 - Single Transferable Vote by Meek's method" (1987), for
+ * capturing election results and metadata, particularly well-suited for STV
+ * elections.
+ */
+class BltFile {
+  candidateCount;
+  seatCount;
+  withdrawn = [];
+  ballots = [];
+  candidates = [];
+  title;
+
+  constructor(text) {
+    let tokens = this.tokenize(text);
+  
+    let i = 0;
+    this.candidateCount = Number(tokens[i++]);
+  
+    this.seatCount = Number(tokens[i++]);
+  
+    let token = Number(tokens[i++]);
+    while (token < 0) {
+      this.withdrawn.push(-token);
+      token = Number(tokens[i++]);
+    }
+  
+    do {
+      let weight = token;
+      token = Number(tokens[i++]);
+      let ballot = new Ballot();
+      while (token != 0) {
+        ballot.candidates.push(token);
+        token = Number(tokens[i++]);
+      }
+      for (let w = 0; w < weight; w++) {
+        this.ballots.push(ballot)
+      }
+      token = Number(tokens[i++]);
+    } while (token != 0);
+  
+    let index = 0;
+    for (let c  = 0; c < this.candidateCount; c++) {
+      token = tokens[i++];
+      this.candidates.push(new Candidate(c + 1, token));
+      index++;
+    }
+
+    token = tokens[i++];
+    this.title = token;
+  }
+
+  tokenize(text) {
+    // remove BOM
+    text = text.replace(/^\uFEFF/, '')
+    // remove comments
+    text = text.replaceAll(/(#[^\r\n]*)?\r?\n/g, ' ').replace(/#.*$/, '');
+    let stringStart = text.indexOf('"');
+    let tokens = text.slice(0, stringStart).split(/\s+/);
+    // remove last empty token
+    tokens.pop();
+    tokens.push(...text.slice(stringStart + 1, text.lastIndexOf('"')).split(/"\s+"/));
+    return tokens;
+  }
+}
+
+/**
+ * Tallies the ballots for an election using Wright system STV rules.
+ * @param {!BltFile} blt The BLT file.
+ * @param {?Array<!number>} excluded The ids of candidates to be excluded from
+ *     processing.
+ * @returns 
+ */
+function countStv(blt, excluded = [], rounds = []) {
+  const continuing = blt.candidates.filter(c => !excluded.includes(c.i));
+  const exhausted = [];
+  // Wright System 2.1
+  const ballots = getNonExhaustedBallots(blt.ballots, excluded);
+  // Wright System 2.2 and 2.3
+  const candidateTotalValueOfVotes = assignBallots(ballots, excluded);
+  // Wright System 2.4
+  const totalVote = ballots.length;
+  // Wright System 2.5
+  const quota = getHagenbachBischoffQuota(totalVote, blt.seatCount);
+  // Wright System 2.6
+  const provisionals = getProvisionals(candidateTotalValueOfVotes, quota);
+  // Wright System 2.7
+  if (provisionals.size == blt.seatCount) {
+    return provisionals;
+  }
+  // Wright System 2.8
+  if (continuing.length > blt.seatCount) {
+    // Wright System 2.9
+    sortByCtvv(provisionals);
+
+    const elected = distributeSurplusVotes(blt.seatCount, provisionals,
+        candidateTotalValueOfVotes, continuing, exhausted, quota);
+    if (elected) {
+      return elected;
+    }
+  }
+  // Wright System 2.12
+  while (provisionals.size < blt.seatCount && haveSurplusValues(provisionals)) {
+    // Wright System 2.9
+    sortByCtvv(provisionals);
+
+    const elected = distributeSurplusVotes(blt.seatCount, provisionals,
+      candidateTotalValueOfVotes, continuing, exhausted, quota);
+    if (elected) {
+      return elected;
+    }
+  }
+  // Wright System 2.13
+  if (provisionals.size < blt.seatCount) {
+    exclude(continuing, provisionals, candidateTotalValueOfVotes, excluded);
+  }
+
+    // Wright System 2.15
+  if (continuing.length == blt.seatCount) {
+    return continuing;
+  }
+  // Wright System 2.16
+  if (continuing.length > blt.seatCount + 1) {
+    return countStv(blt, excluded);
+  } else {
+    // Wright System 2.17
+    return continuing;
+  }
+}
+
+/**
+ * Returns ballots that indicate some ranked preference, not including blank
+ * ballots or those that only include candidates that are excluded from the
+ * tally.
+ * @param {!Array<!Ballot>} ballots The ballots.
+ * @param {!Array<!number>} excluded The ids of candidates to be excluded from
+ *     processing.
+ * @returns {Array<Ballot>} The ballots that express a transferable
+ *     preference.
+ */
+function getNonExhaustedBallots(ballots, excluded) {
+  const getNonExhaustedBallots = [];
+  for (const ballot of ballots) {
+    for (const candidate of ballot.candidates) {
+      if (!excluded.includes(candidate)) {
+        getNonExhaustedBallots.push(ballot);
+        break;
+      }
+    }
+  }
+  return getNonExhaustedBallots;
+}
+
+/**
+ * Returns mapping of candidate ids to the ballots for that candidate, ignoring
+ * excluded candidates.
+ * @param {!Array<!Ballot>} ballots The ballots.
+ * @param {!Array<!number>} excluded The ids of candidates to be excluded from
+ *     processing.
+ * @returns {Map<number, Array<Ballot>} The mapping.
+ */
+function assignBallots(ballots, excluded) {
+  const votes = new Map();
+  for (const ballot of ballots) {
+    let candidate;
+    for (const c of ballot.candidates) {
+      if (!excluded.includes(c)) {
+        candidate = c;
+        break;
+      }
+    }
+    if (candidate) {
+      if (!votes.has(candidate)) {
+        votes.set(candidate, []);
+      }
+      votes.get(candidate).push(ballot);
+    }
+  }
+  return votes;
+}
+
+/**
+ * Gets the Hagenbach-Bischoff quota.
+ * @param {!number} ballotCount The number of ballots.
+ * @param {!number} seatCount The number of vacant seats.
+ * @returns {number} The quota.
+ */
+function getHagenbachBischoffQuota(ballotCount, seatCount) {
+  return ballotCount / (seatCount + 1);
+}
+
+/**
+ * Gets the provisionally elected candidates, that is, the candidates whose
+ * total value of votes (Ctvv) is greater than or equal to the quota.
+ * @param {!Map<!number, !Array<!Ballot>} candidateTotalValueOfVotes
+ *     mapping of candidate ids to the ballots for that candidate
+ * @param {!number} quota The quota.
+ * @returns {Map<number, Array<Ballot>} The provisional candidates.
+ */
+function getProvisionals(candidateTotalValueOfVotes, quota) {
+  const provisionals = new Map();
+  for (const [c, v] of candidateTotalValueOfVotes) {
+    if (v.reduce((sum, i) => sum + i.value, 0) >= quota) {
+      provisionals.set(c, v);
+    }
+  }
+  return provisionals;
+}
+
+/**
+ * Sorts candidates in descending order by candidate total value of votes (Ctvv).
+ * @param {!Map<!number, !Array<!Ballot>} map Map of canidates to their ballots.
+ */
+function sortByCtvv(map) {
+  const mapDesc = new Map([...map.entries()].sort(
+      ([c1, v1], [c2, v2]) => {return getCtvv(v2) - getCtvv(v1)}));
+  map.clear();
+  mapDesc.forEach((value, key) => {map.set(key, value)});
+}
+
+/**
+ * Gets the candidates total value of votes (Ctvv).
+ * @param {!Array<!Ballot>} votes The ballots for a candidate.
+ * @returns {number} The Ctvv.
+ */
+function getCtvv(votes) {
+  return votes.reduce((sum, i) => sum + i.value, 0)
+}
+
+/**
+ * Gets the continuing candidates that haven't already been provisionally elected.
+ * @param {!Array<!Candidate>} continuing The continuing candidates.
+ * @param {!Map<!number, !Array<!Ballot>} provisional The provisionally elected
+ *     candidates.
+ * @returns {Array<Candidate} the nonprovisional continuing candidates.
+ */
+function getNonprovisionalContinuing(continuing, provisional) {
+  const nonProvisionalContinuing = [];
+  outer:
+  for (const cont of continuing) {
+    for (const [c, v] of provisional) {
+      if (c == cont.i) {
+        continue outer;
+      }
+    }
+    nonProvisionalContinuing.push(cont);
+  }
+  return nonProvisionalContinuing;
+}
+
+/**
+ * 
+ * @param {!Map<!number, !Array<!Ballot>} ctvv 
+ * @param {!Array<!Candidate>} nonprovisionalContinuing 
+ * @returns {Map<number, Array<Ballot>}
+ */
+function getNonprovisionalContinuingCtvv(ctvv, nonprovisionalContinuing) {
+  const nonprovisionalContinuingCtvv = new Map();
+  for (const [c, v] of ctvv) {
+    const candidate = Candidate.map.get(c);
+    if (nonprovisionalContinuing.includes(candidate)) {
+      nonprovisionalContinuingCtvv.set(c, v);
+    }
+  }
+  return nonprovisionalContinuingCtvv;
+}
+
+function distributeSurplusVotes(seatCount, provisionals,
+    candidateTotalValueOfVotes, continuing, exhausted, quota) {
+  const nonprovisionalContinuing = getNonprovisionalContinuing(continuing, provisionals);
+  // Wright System 2.10
+  // Transfer surplus for each provisional, highest first
+  for (const [c, v] of provisionals) {
+    const ctvv = getCtvv(v);
+    const surplusTransferValue = ((ctvv - quota) / ctvv);
+    for (const ballot of v) {
+      ballot.value *= surplusTransferValue;
+    }
+    // Wright System 2.11
+    for (const ballot of v) {
+      // Wright System 2.11.1
+      const nextPreference = ballot.nextPreference(c, nonprovisionalContinuing);
+      if (nextPreference) {
+        let nextPrefBallots = candidateTotalValueOfVotes.get(nextPreference);
+        if (!nextPrefBallots) {
+          nextPrefBallots = [];
+          candidateTotalValueOfVotes.set(nextPreference, nextPrefBallots);
+        }
+        nextPrefBallots.push(ballot);
+      } else {
+        // Wright System 2.11.2
+        exhausted.push(ballot);
+      }
+    }
+    // Wright System 2.11.3
+    v.length = 0;
+  }
+  // Wright System 2.11.4
+  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
+      candidateTotalValueOfVotes, nonprovisionalContinuing);
+  const newProvisionals = getProvisionals(nonprovisionalContinuingCtvv, quota);
+  for (const [c, v] of newProvisionals) {
+    provisionals.set(c, v);
+  }
+  // Wright System 2.11.5
+  if (provisionals.size == seatCount) {
+    return provisionals;
+  }
+}
+
+function haveSurplusValues(provisionals) {
+  for (const [c, v] of provisionals) {
+    if (v.length != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Exclude all zero-vote candidates
+// Exclude single lowest candidate
+function exclude(continuing, provisionals, candidateTotalValueOfVotes, excluded) {
+  const nonprovisionalContinuing = getNonprovisionalContinuing(continuing, provisionals);
+  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
+    candidateTotalValueOfVotes, nonprovisionalContinuing);
+  const exc = new Map();
+  for (const [c, v] of nonprovisionalContinuingCtvv) {
+    if (getCtvv(v) == 0) {
+      exc.set(c, v);
+    }
+  }
+  if (exc.size == 0) {
+    sortByCtvv(nonprovisionalContinuingCtvv);
+    const lastKey = Array.from(nonprovisionalContinuingCtvv.keys()).pop();
+    const lastValue = nonprovisionalContinuingCtvv.get(lastKey);
+    const ctvv = getCtvv(lastValue);
+    exc.set(lastKey, lastValue);
+    console.log('Excluding candidate ' + lastKey + '. Ctvv = ' + ctvv);
+    for (const [c, v] of nonprovisionalContinuingCtvv) {
+      if (getCtvv(v) == ctvv) {
+        console.log('Tie with candidate ' + c + '.');
+      }
+    }
+    // Wright System 2.14
+    // else break tie and exclude
+  }
+  excluded.push(...Array.from(exc.keys()));
 }
