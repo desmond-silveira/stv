@@ -466,10 +466,11 @@ function haveBallots(ballotsByCandidate) {
  * Excludes all zero-vote nonprovisional continuing candidates, or if there are
  * none, then the single nonprovisional continuing candidate with the lowest
  * value of the vote.
- * @param {*} continuing 
- * @param {*} provisionals 
- * @param {*} ballotsByCandidate 
- * @param {*} excluded 
+ * @param {!Array<!Candidate>} continuing Continuing candidates.
+ * @param {!Map<!number, !Array<!Ballot>} provisionals Ballots by provisionally
+ *     elected candidates.
+ * @param {!Map<!number, !Array<!Ballot>} ballotsByCandidate Ballots by candidate.
+ * @param {!Array<!number>} excluded Ids of excluded candidates.
  * @returns 
  */
 function exclude(continuing, provisionals, ballotsByCandidate, excluded) {
@@ -477,27 +478,74 @@ function exclude(continuing, provisionals, ballotsByCandidate, excluded) {
       getNonprovisionalContinuing(continuing, provisionals);
   const filteredBallotsMap =
       getFilteredBallotsMap(ballotsByCandidate, nonprovisionalContinuing);
-  const exc = new Map();
+  const exc = [];
   for (const [c, v] of filteredBallotsMap) {
     if (getCtvv(v) == 0) {
-      exc.set(c, v);
+      exc.push(c);
     }
   }
-  if (exc.size == 0) {
+  if (exc.length == 0) {
     sortByCtvv(filteredBallotsMap);
-    const lastKey = Array.from(filteredBallotsMap.keys()).pop();
-    const lastValue = filteredBallotsMap.get(lastKey);
-    const ctvv = getCtvv(lastValue);
-    exc.set(lastKey, lastValue);
-    console.log('Excluding candidate ' + lastKey + '. Ctvv = ' + ctvv);
-    for (const [c, v] of filteredBallotsMap) {
-      if (getCtvv(v) == ctvv) {
-        console.log('Tie with candidate ' + c + '.');
-      }
+    const keys = Array.from(filteredBallotsMap.keys());
+    const ctvv = getCtvv(filteredBallotsMap.get(keys[keys.length - 1]));
+    let i = keys.length - 1;
+    while (i >= 0 && getCtvv(filteredBallotsMap.get(keys[i])) == ctvv) {
+      exc.push(keys[i]);
+      i--;
     }
     // Wright System 2.14
-    // else break tie and exclude
+    if (exc.length > 1) {
+      rankedPairs(exc, ballotsByCandidate);
+    }
   }
-  excluded.push(...Array.from(exc.keys()));
+  excluded.push(...exc);
   return exc;
+}
+
+function rankedPairs(exc, ballotsByCandidate) {
+  const pairs = [];
+  for (let i = 0; i < exc.length - 1; i++) {
+    for (let j = i + 1; j < exc.length; j++) {
+      pairs.push([exc[i], exc[j]]);
+    }
+  }
+  const pairValues = [];
+  for (const [a, b] of pairs) {
+    let aCount = 0;
+    let bCount = 0;
+    for (const ballots of ballotsByCandidate.values()) {
+      for (const ballot of ballots) {
+        for (const candidate of ballot.candidates) {
+          if (candidate == a) {
+            aCount++;
+            break;
+          } else if (candidate == b) {
+            bCount++;
+            break;
+          }
+        }
+      }
+    }
+    let winnerCount;
+    if (aCount > bCount) {
+      winner = [a, aCount];
+    } else if (bCount > aCount) {
+      winner = [b, bCount];
+    } else {
+      winner = [null, aCount];
+    }
+    pairValues.push([[a, b], winner]);
+  }
+  pairValues.sort(([pair1, [winner1, value1]], [pair2, [winner2, value2]]) => value2 - value1);
+  let ret;
+  for (let i = 0; !ret && i < pairValues.length; i++) {
+    ret = pairValues[i][1][0];
+  }
+  if (ret) {
+    exc.length = 0;
+    exc.push(ret);
+  } else {
+    console.log(`Tie in ranked pairs! Using first element among ties: ${exc}`);
+    exc.length = 1;
+  }
 }
