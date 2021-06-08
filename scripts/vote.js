@@ -15,7 +15,7 @@ $(document).ready(function () {
         text = reader.result;
         $('#blt-content').html('<pre>' + text + '</pre>');
         const blt = new BltFile(text);
-        let results = countStv(blt, blt.withdrawn);
+        let results = countStv(blt);
       };
       reader.readAsText(this.files[0]);
     }
@@ -60,14 +60,64 @@ class Ballot {
     }
     return null;
   }
+
+  clone() {
+    const clone = new Ballot();
+    clone.candidates = [...this.candidates];
+    clone.value = this.value;
+    return clone;
+  }
 }
 
-class Round {
+class StvResult {
+  /** {!BltFile} */
+  blt;
+  /** {!Array{?StvRound}} */
+  rounds = [];
+
+  constructor(blt) {
+    this.blt = blt;
+  }
+
+  startNewRound() {
+    this.rounds.push(new StvRound());
+  }
+
+  getCurrentRound() {
+    return this.rounds[this.rounds.length - 1];
+  }
+
+  logSubround(ballotsByCandidate, exhausted, transferredProvisional, excluded) {
+    const lastRound = this.getCurrentRound();
+    const votes = new Map();
+    for (const candidate of this.blt.candidates) {
+      const ballots = ballotsByCandidate.get(candidate.i);
+      let ctvv = 0;
+      if (ballots) {
+        ctvv = getCtvv(ballots);
+      }
+      votes.set(candidate.i, ctvv);
+    }
+    votes.set(0, getCtvv(exhausted));
+    lastRound.ctvv.push(votes);
+    lastRound.provisionals.push(transferredProvisional);
+    for (const candidate of lastRound.provisionals) {
+      if (candidate) {
+        votes.set(candidate, lastRound.quota);
+      }
+    }
+    lastRound.excluded.push(excluded);
+  }
+}
+
+class StvRound {
   quota;
-  /** {!Map<?Candidate, Array<number>>} */
-  candidates;
-  provisionals;
-  excludeds;
+  /** {!Array<!Map<?Candidate, !number>} */
+  ctvv = [];
+  /** {!Array<!Array<!number>>} */
+  provisionals = [];
+  /** {!Array<!Array<!number>>} */
+  excluded = [];
 }
 
 /**
@@ -144,30 +194,35 @@ class BltFile {
  *     processing.
  * @returns 
  */
-function countStv(blt, excluded = [], rounds = []) {
+function countStv(blt, results = new StvResult(blt), excluded = [...blt.withdrawn]) {
+  results.startNewRound();
   const continuing = blt.candidates.filter(c => !excluded.includes(c.i));
   const exhausted = [];
   // Wright System 2.1
   const ballots = getNonExhaustedBallots(blt.ballots, excluded);
   // Wright System 2.2 and 2.3
-  const candidateTotalValueOfVotes = assignBallots(ballots, excluded);
+  const ballotsByCandidate = assignBallots(ballots, excluded);
   // Wright System 2.4
   const totalVote = ballots.length;
   // Wright System 2.5
   const quota = getHagenbachBischoffQuota(totalVote, blt.seatCount);
+  results.getCurrentRound().quota = quota;
   // Wright System 2.6
-  const provisionals = getProvisionals(candidateTotalValueOfVotes, quota);
+  const provisionals = getProvisionals(ballotsByCandidate, quota);
+
+  results.logSubround(ballotsByCandidate, exhausted, null, [...excluded]);
+
   // Wright System 2.7
   if (provisionals.size == blt.seatCount) {
-    return provisionals;
+    return results;
   }
   // Wright System 2.8
   if (continuing.length > blt.seatCount) {
     // Wright System 2.9
     sortByCtvv(provisionals);
 
-    const elected = distributeSurplusVotes(blt.seatCount, provisionals,
-        candidateTotalValueOfVotes, continuing, exhausted, quota);
+    const elected = distributeSurplusVotes(results, provisionals,
+        ballotsByCandidate, continuing, exhausted, quota);
     if (elected) {
       return elected;
     }
@@ -177,27 +232,84 @@ function countStv(blt, excluded = [], rounds = []) {
     // Wright System 2.9
     sortByCtvv(provisionals);
 
-    const elected = distributeSurplusVotes(blt.seatCount, provisionals,
-      candidateTotalValueOfVotes, continuing, exhausted, quota);
+    const elected = distributeSurplusVotes(results, provisionals,
+      ballotsByCandidate, continuing, exhausted, quota);
     if (elected) {
-      return elected;
+      return results;
     }
   }
   // Wright System 2.13
+  let newExcluded;
   if (provisionals.size < blt.seatCount) {
-    exclude(continuing, provisionals, candidateTotalValueOfVotes, excluded);
+    newExcluded = exclude(continuing, provisionals, ballotsByCandidate, excluded);
   }
 
     // Wright System 2.15
   if (continuing.length == blt.seatCount) {
-    return continuing;
+    for (const e of newExcluded) {
+      results.logSubround(ballotsByCandidate, exhausted, null, e);
+    }
+    return results;
   }
   // Wright System 2.16
   if (continuing.length > blt.seatCount + 1) {
-    return countStv(blt, excluded);
+    return countStv(blt, results, excluded);
   } else {
     // Wright System 2.17
-    return continuing;
+    for (const c of getNonprovisionalContinuing(continuing, provisionals)) {
+      results.logSubround(ballotsByCandidate, exhausted, c, null);
+    }
+    return results;
+  }
+}
+
+function distributeSurplusVotes(results, provisionals,
+    ballotsByCandidate, continuing, exhausted, quota) {
+  const nonprovisionalContinuing = getNonprovisionalContinuing(continuing, provisionals);
+  // Wright System 2.10
+  // Transfer surplus for each provisional, highest first
+  for (const [c, v] of provisionals) {
+    const ctvv = getCtvv(v);
+    if (ctvv > quota) {
+      const surplusTransferValue = ((ctvv - quota) / ctvv);
+      for (const ballot of v) {
+        ballot.value *= surplusTransferValue;
+      }
+      // Wright System 2.11
+      for (const ballot of v) {
+        // Wright System 2.11.1
+        const nextPreference = ballot.nextPreference(c, nonprovisionalContinuing);
+        if (nextPreference) {
+          let nextPrefBallots = ballotsByCandidate.get(nextPreference);
+          if (!nextPrefBallots) {
+            nextPrefBallots = [];
+            ballotsByCandidate.set(nextPreference, nextPrefBallots);
+          }
+          nextPrefBallots.push(ballot);
+        } else {
+          // Wright System 2.11.2
+          exhausted.push(ballot);
+        }
+      }
+      // Wright System 2.11.3
+      v.length = 0;
+      results.logSubround(ballotsByCandidate, exhausted, c, null);
+    }
+  }
+  // Wright System 2.11.4
+  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
+      ballotsByCandidate, nonprovisionalContinuing);
+  const newProvisionals = getProvisionals(nonprovisionalContinuingCtvv, quota);
+  for (const [c, v] of newProvisionals) {
+    provisionals.set(c, v);
+  }
+  // Wright System 2.11.5
+  if (provisionals.size == results.blt.seatCount) {
+    sortByCtvv(newProvisionals);
+    for (const [c, v] of newProvisionals) {
+      results.logSubround(ballotsByCandidate, exhausted, c, null);
+    }
+    return results;
   }
 }
 
@@ -212,16 +324,16 @@ function countStv(blt, excluded = [], rounds = []) {
  *     preference.
  */
 function getNonExhaustedBallots(ballots, excluded) {
-  const getNonExhaustedBallots = [];
+  const nonExhaustedBallots = [];
   for (const ballot of ballots) {
     for (const candidate of ballot.candidates) {
       if (!excluded.includes(candidate)) {
-        getNonExhaustedBallots.push(ballot);
+        nonExhaustedBallots.push(ballot.clone());
         break;
       }
     }
   }
-  return getNonExhaustedBallots;
+  return nonExhaustedBallots;
 }
 
 /**
@@ -338,49 +450,6 @@ function getNonprovisionalContinuingCtvv(ctvv, nonprovisionalContinuing) {
   return nonprovisionalContinuingCtvv;
 }
 
-function distributeSurplusVotes(seatCount, provisionals,
-    candidateTotalValueOfVotes, continuing, exhausted, quota) {
-  const nonprovisionalContinuing = getNonprovisionalContinuing(continuing, provisionals);
-  // Wright System 2.10
-  // Transfer surplus for each provisional, highest first
-  for (const [c, v] of provisionals) {
-    const ctvv = getCtvv(v);
-    const surplusTransferValue = ((ctvv - quota) / ctvv);
-    for (const ballot of v) {
-      ballot.value *= surplusTransferValue;
-    }
-    // Wright System 2.11
-    for (const ballot of v) {
-      // Wright System 2.11.1
-      const nextPreference = ballot.nextPreference(c, nonprovisionalContinuing);
-      if (nextPreference) {
-        let nextPrefBallots = candidateTotalValueOfVotes.get(nextPreference);
-        if (!nextPrefBallots) {
-          nextPrefBallots = [];
-          candidateTotalValueOfVotes.set(nextPreference, nextPrefBallots);
-        }
-        nextPrefBallots.push(ballot);
-      } else {
-        // Wright System 2.11.2
-        exhausted.push(ballot);
-      }
-    }
-    // Wright System 2.11.3
-    v.length = 0;
-  }
-  // Wright System 2.11.4
-  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
-      candidateTotalValueOfVotes, nonprovisionalContinuing);
-  const newProvisionals = getProvisionals(nonprovisionalContinuingCtvv, quota);
-  for (const [c, v] of newProvisionals) {
-    provisionals.set(c, v);
-  }
-  // Wright System 2.11.5
-  if (provisionals.size == seatCount) {
-    return provisionals;
-  }
-}
-
 function haveSurplusValues(provisionals) {
   for (const [c, v] of provisionals) {
     if (v.length != 0) {
@@ -418,4 +487,5 @@ function exclude(continuing, provisionals, candidateTotalValueOfVotes, excluded)
     // else break tie and exclude
   }
   excluded.push(...Array.from(exc.keys()));
+  return exc;
 }
