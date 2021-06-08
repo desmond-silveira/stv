@@ -192,7 +192,7 @@ class BltFile {
  * @param {!BltFile} blt The BLT file.
  * @param {?Array<!number>} excluded The ids of candidates to be excluded from
  *     processing.
- * @returns 
+ * @returns {!StvResult} The results of the tally.
  */
 function countStv(blt, results = new StvResult(blt), excluded = [...blt.withdrawn]) {
   results.startNewRound();
@@ -228,7 +228,7 @@ function countStv(blt, results = new StvResult(blt), excluded = [...blt.withdraw
     }
   }
   // Wright System 2.12
-  while (provisionals.size < blt.seatCount && haveSurplusValues(provisionals)) {
+  while (provisionals.size < blt.seatCount && haveBallots(provisionals)) {
     // Wright System 2.9
     sortByCtvv(provisionals);
 
@@ -297,7 +297,7 @@ function distributeSurplusVotes(results, provisionals,
     }
   }
   // Wright System 2.11.4
-  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
+  const nonprovisionalContinuingCtvv = getFilteredBallotsMap(
       ballotsByCandidate, nonprovisionalContinuing);
   const newProvisionals = getProvisionals(nonprovisionalContinuingCtvv, quota);
   for (const [c, v] of newProvisionals) {
@@ -377,14 +377,14 @@ function getHagenbachBischoffQuota(ballotCount, seatCount) {
 /**
  * Gets the provisionally elected candidates, that is, the candidates whose
  * total value of votes (Ctvv) is greater than or equal to the quota.
- * @param {!Map<!number, !Array<!Ballot>} candidateTotalValueOfVotes
- *     mapping of candidate ids to the ballots for that candidate
+ * @param {!Map<!number, !Array<!Ballot>} ballotsByCandidate
+ *     Mapping of candidate ids to the ballots for that candidate.
  * @param {!number} quota The quota.
  * @returns {Map<number, Array<Ballot>} The provisional candidates.
  */
-function getProvisionals(candidateTotalValueOfVotes, quota) {
+function getProvisionals(ballotsByCandidate, quota) {
   const provisionals = new Map();
-  for (const [c, v] of candidateTotalValueOfVotes) {
+  for (const [c, v] of ballotsByCandidate) {
     if (v.reduce((sum, i) => sum + i.value, 0) >= quota) {
       provisionals.set(c, v);
     }
@@ -417,7 +417,7 @@ function getCtvv(votes) {
  * @param {!Array<!Candidate>} continuing The continuing candidates.
  * @param {!Map<!number, !Array<!Ballot>} provisional The provisionally elected
  *     candidates.
- * @returns {Array<Candidate} the nonprovisional continuing candidates.
+ * @returns {Array<Candidate} The nonprovisional continuing candidates.
  */
 function getNonprovisionalContinuing(continuing, provisional) {
   const nonProvisionalContinuing = [];
@@ -434,24 +434,27 @@ function getNonprovisionalContinuing(continuing, provisional) {
 }
 
 /**
- * 
- * @param {!Map<!number, !Array<!Ballot>} ctvv 
- * @param {!Array<!Candidate>} nonprovisionalContinuing 
- * @returns {Map<number, Array<Ballot>}
+ * Gets copy of ballots by candidate Map filtered by the given set of candidates.
+ * @param {!Map<!number, !Array<!Ballot>} ballotsByCandidate The ballots by candidate.
+ * @param {!Array<!Candidate>} candidates The candidates to filter by.
+ * @returns {Map<number, Array<Ballot>} The filtered ballots by candidate Map.
  */
-function getNonprovisionalContinuingCtvv(ctvv, nonprovisionalContinuing) {
-  const nonprovisionalContinuingCtvv = new Map();
-  for (const [c, v] of ctvv) {
-    const candidate = Candidate.map.get(c);
-    if (nonprovisionalContinuing.includes(candidate)) {
-      nonprovisionalContinuingCtvv.set(c, v);
+function getFilteredBallotsMap(ballotsByCandidate, candidates) {
+  const filteredBallotsMap = new Map();
+  for (const [c, v] of ballotsByCandidate) {
+    if (candidates.includes(Candidate.map.get(c))) {
+      filteredBallotsMap.set(c, v);
     }
   }
-  return nonprovisionalContinuingCtvv;
+  return filteredBallotsMap;
 }
 
-function haveSurplusValues(provisionals) {
-  for (const [c, v] of provisionals) {
+/**
+ * @param {!Map<!number, !Array<!Ballot>} ballotsByCandidate The ballot Map.
+ * @returns Whether any of the candidates in the ballot Map have any ballots.
+ */
+function haveBallots(ballotsByCandidate) {
+  for (const [c, v] of ballotsByCandidate) {
     if (v.length != 0) {
       return true;
     }
@@ -459,26 +462,35 @@ function haveSurplusValues(provisionals) {
   return false;
 }
 
-// Exclude all zero-vote candidates
-// Exclude single lowest candidate
-function exclude(continuing, provisionals, candidateTotalValueOfVotes, excluded) {
-  const nonprovisionalContinuing = getNonprovisionalContinuing(continuing, provisionals);
-  const nonprovisionalContinuingCtvv = getNonprovisionalContinuingCtvv(
-    candidateTotalValueOfVotes, nonprovisionalContinuing);
+/**
+ * Excludes all zero-vote nonprovisional continuing candidates, or if there are
+ * none, then the single nonprovisional continuing candidate with the lowest
+ * value of the vote.
+ * @param {*} continuing 
+ * @param {*} provisionals 
+ * @param {*} ballotsByCandidate 
+ * @param {*} excluded 
+ * @returns 
+ */
+function exclude(continuing, provisionals, ballotsByCandidate, excluded) {
+  const nonprovisionalContinuing =
+      getNonprovisionalContinuing(continuing, provisionals);
+  const filteredBallotsMap =
+      getFilteredBallotsMap(ballotsByCandidate, nonprovisionalContinuing);
   const exc = new Map();
-  for (const [c, v] of nonprovisionalContinuingCtvv) {
+  for (const [c, v] of filteredBallotsMap) {
     if (getCtvv(v) == 0) {
       exc.set(c, v);
     }
   }
   if (exc.size == 0) {
-    sortByCtvv(nonprovisionalContinuingCtvv);
-    const lastKey = Array.from(nonprovisionalContinuingCtvv.keys()).pop();
-    const lastValue = nonprovisionalContinuingCtvv.get(lastKey);
+    sortByCtvv(filteredBallotsMap);
+    const lastKey = Array.from(filteredBallotsMap.keys()).pop();
+    const lastValue = filteredBallotsMap.get(lastKey);
     const ctvv = getCtvv(lastValue);
     exc.set(lastKey, lastValue);
     console.log('Excluding candidate ' + lastKey + '. Ctvv = ' + ctvv);
-    for (const [c, v] of nonprovisionalContinuingCtvv) {
+    for (const [c, v] of filteredBallotsMap) {
       if (getCtvv(v) == ctvv) {
         console.log('Tie with candidate ' + c + '.');
       }
