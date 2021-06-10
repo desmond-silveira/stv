@@ -29,6 +29,7 @@ table, th, td {
 
 th {
   background-color: lightgray;
+  white-space: nowrap;
 }
 
 td {
