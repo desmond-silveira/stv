@@ -27,14 +27,18 @@ table, th, td {
   border: 1px solid black;
 }
 
+th {
+  background-color: lightgray;
+}
+
 td {
   font-family: "Lucida Console", "Courier New", monospace;
 }
 
 .elected {
-  background-color:greenyellow;
+  background-color: lightgreen;
 }
 
 .excluded {
-  background-color: red;
+  background-color: lightcoral;
 }

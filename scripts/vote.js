@@ -39,20 +39,27 @@ function getRoundTable(roundNumber, round, candidates) {
   }
   roundTable += '</tr>\n';
   for (const candidate of candidates) {
-    roundTable += `<tr><th>${candidate.name}</th>`;
-    for (let i = 0; i < round.ctvv.length; i++) {
-      roundTable += '<td';
-      if (round.excluded[i] && round.excluded[i].includes(candidate.i)) {
-        roundTable += ' class="excluded"';
-      } else if (round.provisionals[i] == candidate.i) {
-        roundTable += ' class="elected"';
-      }
-      roundTable += '>';
-      roundTable += round.ctvv[i].get(candidate.i);
-      roundTable += '</td>';
-    }
-    roundTable += '</tr>\n';
+    roundTable += `<tr><th>${candidate.name}</th>`
+        + getCtvvCells(round.ctvv, candidate.i, round.excluded, round.provisionals)
+        + '</tr>\n';
   }
+  roundTable += `<tr><th>Exhausted</th>`
+      + getCtvvCells(round.ctvv, 0, round.excluded, round.provisionals)
+      + '</tr>\n';
   roundTable += '</table>';
   return roundTable;
+}
+
+function getCtvvCells(ctvv, candidate, excluded, provisionals) {
+  let ctvvCells = '';
+  for (let i = 0; i < ctvv.length; i++) {
+    ctvvCells += '<td';
+    if (excluded[i] && excluded[i].includes(candidate)) {
+      ctvvCells += ' class="excluded"';
+    } else if (provisionals[i] == candidate) {
+      ctvvCells += ' class="elected"';
+    }
+    ctvvCells += `>${ctvv[i].get(candidate)}</td>`;
+  }
+  return ctvvCells;
 }
