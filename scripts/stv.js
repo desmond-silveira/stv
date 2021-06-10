@@ -6,22 +6,6 @@
  * and preserve this notice.
  */
 
-$(document).ready(function () {
-  $('#blt').change(function (event) {
-    if (this.files && this.files[0]) {
-      const reader = new FileReader();
-      let text;
-      reader.onload = function () {
-        text = reader.result;
-        $('#blt-content').html('<pre>' + text + '</pre>');
-        const blt = new BltFile(text);
-        let results = countStv(blt);
-      };
-      reader.readAsText(this.files[0]);
-    }
-  });
-});
-
 /** An election candidate. */
 class Candidate {
   static map = new Map();
