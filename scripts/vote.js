@@ -14,7 +14,16 @@ $(document).ready(function () {
 });
 
 function getResultsHtml(results) {
-  let resultsHtml = `<h1>${results.blt.title}</h1>\n`;
+  let resultsHtml = `<h1>${results.blt.title}</h1>\n`
+      + `<p>Candidates: ${results.blt.candidateCount}</br>\n`
+      + `Vacant seats: ${results.blt.seatCount}</p>\n`;
+  if (results.blt.withdrawn.length > 0) {
+    resultsHtml += '<p>Withdrawn Candidates:</p>\n<ul>\n';
+    for (const candidate of results.blt.withdrawn) {
+      resultsHtml += ` <li>${Candidate.map.get(candidate).name}</li>\n`;
+    }
+    resultsHtml += '</ul>\n';
+  }
   for (let i = 0; i < results.rounds.length; i++) {
     resultsHtml += getRoundTable(i + 1, results.rounds[i], results.blt.candidates);
   }
@@ -22,25 +31,28 @@ function getResultsHtml(results) {
 }
 
 function getRoundTable(roundNumber, round, candidates) {
-  let roundHtml = `\n<table>\n<caption>Round ${roundNumber} (quota = ${round.quota})</caption>`;
-  roundHtml += '<tr><th>Candidates</th>';
+  let roundTable = `\n<table>\n`
+      + `<caption>Round ${roundNumber} (quota = ${round.quota})</caption>`;
+  roundTable += '<tr><th>Candidates</th>';
   for (let i = 0; i < round.ctvv.length; i++) {
-    roundHtml += `<th>${roundNumber}.${i}</th>`;
+    roundTable += `<th>${roundNumber}.${i}</th>`;
   }
-  roundHtml += '</tr>\n';
+  roundTable += '</tr>\n';
   for (const candidate of candidates) {
-    roundHtml += `<tr><th>${candidate.name}</th>`;
+    roundTable += `<tr><th>${candidate.name}</th>`;
     for (let i = 0; i < round.ctvv.length; i++) {
-      roundHtml += '<td>';
-      roundHtml += getCandidateCell(i, round.ctvv[i], round.excluded[i], round.provisionals[i], candidate);
-      roundHtml += '</td>';
+      roundTable += '<td';
+      if (round.excluded[i] && round.excluded[i].includes(candidate.i)) {
+        roundTable += ' class="excluded"';
+      } else if (round.provisionals[i] == candidate.i) {
+        roundTable += ' class="elected"';
+      }
+      roundTable += '>';
+      roundTable += round.ctvv[i].get(candidate.i);
+      roundTable += '</td>';
     }
-    roundHtml += '</tr>\n';
+    roundTable += '</tr>\n';
   }
-  roundHtml += '</table>';
-  return roundHtml;
-}
-
-function getCandidateCell(subroundNumber, ctvv, excluded, provisional, candidate) {
-  return ctvv.get(candidate.i);
+  roundTable += '</table>';
+  return roundTable;
 }

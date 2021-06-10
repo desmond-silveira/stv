@@ -15,3 +15,11 @@ table, th, td {
 td {
   font-family: "Lucida Console", "Courier New", monospace;
 }
+
+.elected {
+  background-color:greenyellow;
+}
+
+.excluded {
+  background-color: red;
+}
