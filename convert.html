@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description" content="Ballot tallying program">
+  <meta name="keywords" content="ballot,election,vote,STV">
+  <meta name="author" content="Desmond Silveira">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vote</title>
+
+  <!-- completely unnecessary for such a simple webpage but why not -->
+  <script src="https://cdn.jsdelivr.net/gh/vExcess/Barbequery@main/index.js"></script>
+  <script src="./scripts/csv-to-blt.js"></script>
+
+  <style>
+        body {
+            margin: 0px;
+            font-family: sans-serif;
+            font-size: 14px;
+        }
+
+        .page-body {
+            margin: 12px;
+        }
+
+        .nav-btn {
+            padding: 4px;
+            text-decoration: none;
+            margin-right: 6px;
+            color: black;
+        }
+        .nav-btn:hover {
+            background-color: rgba(255, 255, 255, 0.5);
+        }
+
+        pre {
+            border: 1px solid black;
+            padding: 4px;
+            overflow: auto;
+        }
+  </style>
+</head>
+<body>
+
+  <script>
+        // create nav bar
+        $.createComponent("nav-btn", $.html`
+            <a class="nav-btn" href="\{href}">\{text}</a>
+        `);
+        $.createComponent("nav", $.html`
+            <div class="nav">
+                <nav-btn href="./index.html" id="home" text="HOME">
+                <nav-btn href="./about.html" id="about" text="ABOUT">
+                <nav-btn href="./convert.html" id="converter" text="CONVERTER">
+            </div>
+        `)().css(`
+            background-color: rgb(200, 200, 200);
+            font-size: 20px;
+            padding: 6px;
+        `).appendTo(document.body);
+
+        $.deleteComponent("nav-btn", "nav") // free up memory
+
+        let pageBody = $("div").addClass("page-body").appendTo(document.body);
+
+        // election title 
+        $("h2")
+            .text("Election Title:")
+            .appendTo(pageBody)
+        $("input")
+            .css({width: "50%"})
+            .setId("title-input")
+            .appendTo(pageBody)
+
+        // num winneres
+        $("h2")
+            .text("Number of winners:")
+            .appendTo(pageBody)
+        $("input")
+            .attr("type", "number")
+            .setId("num-winners-input")
+            .appendTo(pageBody)
+
+        // upload csv
+        $("h2")
+            .text("Upload CSV File")
+            .css({
+                fontSize: "16px",
+            })
+            .appendTo(pageBody)
+
+        // File Upload Element
+        $("input")
+            .attr("type", "file")
+            .appendTo(pageBody)
+            .on("change", function (e) {
+                if (this.files[0]) {
+                    const reader = new FileReader();
+                    reader.onload = function () {
+                        let csvFileContent = reader.result;
+                        $('#csv-content').text(csvFileContent);
+                        
+                        let bltFileContent = CSV2BLT(reader.result, {
+                            title: $("#title-input").value,
+                            numWinners: Number($("#num-winners-input").value)
+                        }).bltContent;
+                        $('#blt-content').text(bltFileContent);
+                    };
+                    reader.readAsText(this.files[0]);
+                }
+            })
+
+        // File Containers
+        $("h3").text("CSV File").appendTo(pageBody)
+        $("pre").setId("csv-content").appendTo(pageBody)
+
+        $("h3").text("BLT File").appendTo(pageBody)
+        $("pre").setId("blt-content").appendTo(pageBody)
+  </script>
+</body>
+</html>
