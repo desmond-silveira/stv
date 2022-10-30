@@ -63,7 +63,7 @@ function CSV2BLT (csvContent, data) {
         rowValues.push(val);
         
         // if is end of row: push row to table and create new row
-        if (isEndOfRow) {
+        if (isEndOfRow || i == csvContent.length) {
             csvTable.push(rowValues);
             rowValues = [];
         }
